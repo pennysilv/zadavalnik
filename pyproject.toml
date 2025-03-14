@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=61.0", "setuptools-scm>=7.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "zadavalnik"
+version = "0.0.1"
+description = "Questioning bot"
+authors = [
+    { name = "Anton Lobachev", email = "anvlobachev@gmail.com" }
+]
+# license = { file = "LICENSE" }
+readme = "README.md"
+requires-python = ">=3.8"
+dependencies = [
+    # "requests>=2.25.0",
+    # "numpy>=1.21.0"
+]
+
+[project.urls]
+# Homepage = "https://github.com/username/my_package"
+# Documentation = "https://github.com/username/my_package#readme"
+# Issues = "https://github.com/username/my_package/issues"
+
+# [tool.setuptools_scm]
+# write_to = "my_package/_version.py"
