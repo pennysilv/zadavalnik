@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=61.0", "setuptools-scm>=7.0"]
+requires = ["setuptools", "setuptools-scm"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -11,11 +11,15 @@ authors = [
 ]
 # license = { file = "LICENSE" }
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.12"
 dependencies = [
-    # "requests>=2.25.0",
-    # "numpy>=1.21.0"
+    "numpy",
+    "requests"
 ]
+
+[tool.setuptools]
+packages = {find = {where = ["src"]}}
+
 
 [project.urls]
 # Homepage = "https://github.com/username/my_package"
