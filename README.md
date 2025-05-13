@@ -1,4 +1,4 @@
-# Zadavalnik
+# Zadavalnik dev branch
 
 Zadavalnik — это Telegram-бот, который помогает повторять учебный материал,
 используя OpenAI API для обработки запросов.
