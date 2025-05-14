@@ -1,4 +1,4 @@
-# Zadavalnik dev branch
+# Zadavalnik dev branch N2
 
 Zadavalnik — это Telegram-бот, который помогает повторять учебный материал,
 используя OpenAI API для обработки запросов.
