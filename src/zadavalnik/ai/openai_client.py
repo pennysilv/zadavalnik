@@ -14,7 +14,7 @@ class OpenAIClient:
 
     def _get_system_prompt_for_test(self, topic: str, history: Optional[List[Dict]] = None) -> str:
         return f"""
-        Ты — бот Zadavalnik помошник для повторения материала.
+        Ты — бот Zadavalnik помощник для повторения материала.
         Проводящишь интерактивное тестирование по теме: "{topic}".
 
         Твоя задача — задавать вопросы пользователю один за другим.
