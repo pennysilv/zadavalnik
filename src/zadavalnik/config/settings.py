@@ -8,9 +8,9 @@ class Settings(BaseSettings):
     # OPENAI_MODEL: str = "deepseek-chat-v3-0324"  # Не работает tool use
     # OPENAI_MODEL: str = "deepseek-r1"  # Не работает tool use
 
-    OPENAI_MODEL: str = "gemini-2.0-flash-001" # Быстро, недорого. Работает tool use. Для тестов подходит.
+    # OPENAI_MODEL: str = "gemini-2.0-flash-001" # Быстро, недорого. Работает tool use. Для тестов подходит.
     
-    # OPENAI_MODEL: str = "qwen-2.5-72b-instruct"   # Хорошо, но надо разбираться с tool use
+    OPENAI_MODEL: str = "qwen-2.5-72b-instruct"   # Хорошо, но надо разбираться с tool use
     # OPENAI_MODEL: str = "grok-3-mini-beta"  # Хорошо, но дороговато
 
     OPENAI_API_URL: str = "https://bothub.chat/api/v2/openai/v1"
