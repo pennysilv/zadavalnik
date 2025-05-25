@@ -82,21 +82,6 @@ async def handle_photo_message(update: Update, context: ContextTypes.DEFAULT_TYP
         await update.message.reply_text("Ошибка конфигурации бота. Обратитесь к администратору.")
         return
     
-    # Проверяем лимиты, как в _initialize_new_test_session
-    user_tg = update.effective_user
-    if settings.TEST_USER_TGID != int(user_id):
-        async for db in get_db_session():
-            await get_or_create_telegram_user_in_db(db, user_tg)
-            tests_today = await count_user_daily_tests(db, user_id)
-            logger.info(f"User {user_id} has {tests_today} tests today. Limit: {settings.MAX_TESTS_PER_DAY}")
-            if tests_today >= settings.MAX_TESTS_PER_DAY:
-                await log_rate_limit_attempt(db, user_id)
-                await update.message.reply_text(
-                    f"Вы уже прошли максимальное количество тестов на сегодня ({settings.MAX_TESTS_PER_DAY}). "
-                    "Пожалуйста, возвращайтесь завтра!"
-                )
-                return
-    
     try:
         # Получаем самое большое изображение из отправленного
         photo = update.message.photo[-1]  # Берем самое большое разрешение
