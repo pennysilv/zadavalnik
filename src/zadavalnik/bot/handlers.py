@@ -35,6 +35,31 @@ def _clear_user_test_state(context: ContextTypes.DEFAULT_TYPE):
         if key in context.user_data:
             del context.user_data[key]
 
+async def _process_image_to_base64(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обрабатывает изображение: скачивает и конвертирует в base64"""
+    user_id = update.effective_user.id
+    
+    # Получаем самое большое изображение из отправленного
+    photo = update.message.photo[-1]  # Берем самое большое разрешение
+    
+    # Скачиваем файл
+    file = await context.bot.get_file(photo.file_id)
+    
+    # Скачиваем изображение в память
+    image_bytes = io.BytesIO()
+    await file.download_to_memory(image_bytes)
+    image_bytes.seek(0)
+    
+    # Конвертируем в base64
+    image_base64 = base64.b64encode(image_bytes.getvalue()).decode('utf-8')
+    
+    logger.info(f"Successfully converted image to base64 for user {user_id}. Size: {len(image_base64)} chars")
+    
+    # Определяем формат изображения
+    image_format = "jpeg"  # По умолчанию JPEG, можно улучшить определение формата
+    
+    return image_base64, image_format
+
 async def _initialize_new_test_session(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_tg = update.effective_user
     user_id = user_tg.id
@@ -83,28 +108,12 @@ async def handle_photo_message(update: Update, context: ContextTypes.DEFAULT_TYP
         return
     
     try:
-        # Получаем самое большое изображение из отправленного
-        photo = update.message.photo[-1]  # Берем самое большое разрешение
-        
         # Уведомляем пользователя о начале обработки
         await update.message.reply_text("Анализирую изображение и создаю тест...")
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
         
-        # Скачиваем файл
-        file = await context.bot.get_file(photo.file_id)
-        
-        # Скачиваем изображение в память
-        image_bytes = io.BytesIO()
-        await file.download_to_memory(image_bytes)
-        image_bytes.seek(0)
-        
-        # Конвертируем в base64
-        image_base64 = base64.b64encode(image_bytes.getvalue()).decode('utf-8')
-        
-        logger.info(f"Successfully converted image to base64 for user {user_id}. Size: {len(image_base64)} chars")
-        
-        # Определяем формат изображения
-        image_format = "jpeg"  # По умолчанию JPEG, можно улучшить определение формата
+        # Обрабатываем изображение
+        image_base64, image_format = await _process_image_to_base64(update, context)
         
         # Анализируем изображение через OpenAI и создаем тест
         gpt_response_data, gpt_history = await openai_client.analyze_image_and_start_test(
