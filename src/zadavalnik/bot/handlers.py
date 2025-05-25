@@ -130,63 +130,6 @@ async def _process_test_start_from_response(update: Update, context: ContextType
     
     return True
 
-async def _process_test_continuation(update: Update, context: ContextTypes.DEFAULT_TYPE, text_received=None):
-    """Общая функция для продолжения теста"""
-    user_id = update.effective_user.id
-    active_test_id = context.user_data.get('active_test_attempt_id')
-    
-    if not active_test_id:
-        logger.error(f"User {user_id} in IN_TEST state but no active_test_attempt_id found.")
-        await update.message.reply_text("Произошла ошибка сессии. Пожалуйста, начните новый тест: /newtest")
-        _clear_user_test_state(context)
-        context.user_data['current_state'] = UserState.AWAITING_TOPIC
-        return False
-
-    openai_client: OpenAIClient = context.application.bot_data.get('openai_client')
-    if not openai_client:
-        logger.error("OpenAI client not found in bot_data.")
-        await update.message.reply_text("Ошибка конфигурации бота. Обратитесь к администратору.")
-        return False
-        
-    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
-
-    current_gpt_history = context.user_data.get('gpt_chat_history', [])
-    test_from_image = context.user_data.get('test_from_image', False)
-    
-    if test_from_image:
-        # Используем метод для продолжения теста из изображения
-        gpt_response_data, gpt_history = await openai_client.continue_image_test_session(
-            history=current_gpt_history,
-            user_message_text=text_received
-        )
-    else:
-        # Используем обычный метод для продолжения теста
-        gpt_response_data, gpt_history = await openai_client.continue_test_session(
-            history=current_gpt_history,
-            user_message_text=text_received
-        )
-
-    if gpt_response_data:
-        context.user_data.update({
-            'gpt_chat_history': gpt_history,
-            'current_question_num': gpt_response_data.get("current_question_number"),
-        })
-
-        await update.message.reply_text(gpt_response_data["message_to_user"])
-
-        if gpt_response_data.get("is_final_summary"):
-            async for db in get_db_session():
-                await update_test_attempt_status(db, active_test_id, TestStatus.COMPLETED, end_time=True)
-            context.user_data['current_state'] = UserState.TEST_COMPLETED
-            logger.info(f"Test {active_test_id} completed for user {user_id}")
-            await update.message.reply_text("Тест завершен! Чтобы начать новый, используйте команду /newtest.")
-        
-        return True
-    else:
-        logger.warning(f"Failed to continue AI test session for user {user_id}, test_id {active_test_id}. Response data: {gpt_response_data}")
-        await update.message.reply_text("Произошла ошибка при общении с ИИ. Попробуйте ответить еще раз. Если ошибка повторится, начните новый тест: /newtest. Возможно, ИИ вернул некорректный формат данных.")
-        return False
-
 async def _get_openai_client(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Получение клиента OpenAI из контекста бота"""
     openai_client: OpenAIClient = context.application.bot_data.get('openai_client')
