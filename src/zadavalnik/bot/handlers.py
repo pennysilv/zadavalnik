@@ -70,16 +70,39 @@ async def new_test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def handle_photo_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик фотографий - скачивание и конвертация в base64"""
+    """Обработчик фотографий - анализ изображения и создание теста"""
     user_id = update.effective_user.id
-    logger.info(f"User {user_id} sent a photo")
+    current_state = context.user_data.get('current_state')
+    
+    logger.info(f"User {user_id} (state: {current_state}) sent a photo")
+    
+    openai_client: OpenAIClient = context.application.bot_data.get('openai_client')
+    if not openai_client:
+        logger.error("OpenAI client not found in bot_data.")
+        await update.message.reply_text("Ошибка конфигурации бота. Обратитесь к администратору.")
+        return
+    
+    # Проверяем лимиты, как в _initialize_new_test_session
+    user_tg = update.effective_user
+    if settings.TEST_USER_TGID != int(user_id):
+        async for db in get_db_session():
+            await get_or_create_telegram_user_in_db(db, user_tg)
+            tests_today = await count_user_daily_tests(db, user_id)
+            logger.info(f"User {user_id} has {tests_today} tests today. Limit: {settings.MAX_TESTS_PER_DAY}")
+            if tests_today >= settings.MAX_TESTS_PER_DAY:
+                await log_rate_limit_attempt(db, user_id)
+                await update.message.reply_text(
+                    f"Вы уже прошли максимальное количество тестов на сегодня ({settings.MAX_TESTS_PER_DAY}). "
+                    "Пожалуйста, возвращайтесь завтра!"
+                )
+                return
     
     try:
         # Получаем самое большое изображение из отправленного
         photo = update.message.photo[-1]  # Берем самое большое разрешение
         
         # Уведомляем пользователя о начале обработки
-        await update.message.reply_text("Обрабатываю изображение...")
+        await update.message.reply_text("Анализирую изображение и создаю тест...")
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
         
         # Скачиваем файл
@@ -95,17 +118,51 @@ async def handle_photo_message(update: Update, context: ContextTypes.DEFAULT_TYP
         
         logger.info(f"Successfully converted image to base64 for user {user_id}. Size: {len(image_base64)} chars")
         
-        # Пока что просто уведомляем об успешной обработке
-        await update.message.reply_text(
-            "Изображение успешно обработано и конвертировано в формат base64!\n"
-            "В будущих версиях бот сможет анализировать содержимое изображений."
+        # Определяем формат изображения
+        image_format = "jpeg"  # По умолчанию JPEG, можно улучшить определение формата
+        
+        # Анализируем изображение через OpenAI и создаем тест
+        gpt_response_data, gpt_history = await openai_client.analyze_image_and_start_test(
+            image_base64=image_base64,
+            image_format=image_format
         )
-
-        # Здесь в будущем можно будет передать image_base64 в OpenAI для анализа
-        # openai_client: OpenAIClient = context.application.bot_data.get('openai_client')
-        # if openai_client:
-        #     # Анализ изображения через OpenAI Vision API
-        #     pass
+        
+        if gpt_response_data:
+            # Очищаем предыдущее состояние
+            _clear_user_test_state(context)
+            
+            # Получаем определенную тему из ответа ИИ
+            detected_topic = gpt_response_data.get("detected_topic", "Тест по изображению")
+            
+            # Логируем начало теста в БД
+            async for db in get_db_session():
+                attempt = await log_test_attempt_start(db, user_id, detected_topic)
+                context.user_data['active_test_attempt_id'] = attempt.id
+            
+            # Обновляем состояние пользователя
+            context.user_data.update({
+                'current_topic': detected_topic,
+                'current_state': UserState.IN_TEST,
+                'gpt_chat_history': gpt_history,
+                'current_question_num': gpt_response_data.get("current_question_number"),
+                'total_questions': gpt_response_data.get("total_questions_in_test"),
+                'test_from_image': True  # Флаг, что тест создан из изображения
+            })
+            
+            await update.message.reply_text(gpt_response_data["message_to_user"])
+            
+            # Проверяем, не завершился ли тест сразу (маловероятно, но на всякий случай)
+            if gpt_response_data.get("is_final_summary"):
+                async for db in get_db_session():
+                    await update_test_attempt_status(db, context.user_data['active_test_attempt_id'], TestStatus.COMPLETED, end_time=True)
+                context.user_data['current_state'] = UserState.TEST_COMPLETED
+                await update.message.reply_text("Тест завершен! Для нового теста используйте /newtest.")
+        else:
+            logger.warning(f"Failed to analyze image and start test for user {user_id}. Response data: {gpt_response_data}")
+            await update.message.reply_text(
+                "Не удалось проанализировать изображение или создать тест. "
+                "Попробуйте другое изображение или начните обычный тест командой /newtest."
+            )
         
     except Exception as e:
         logger.error(f"Error processing photo for user {user_id}: {e}", exc_info=True)
@@ -177,10 +234,22 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
 
         current_gpt_history = context.user_data.get('gpt_chat_history', [])
-        gpt_response_data, gpt_history = await openai_client.continue_test_session(
-            history=current_gpt_history,
-            user_message_text=text_received
-        )
+        
+        # Проверяем, был ли тест создан из изображения
+        test_from_image = context.user_data.get('test_from_image', False)
+        
+        if test_from_image:
+            # Используем метод для продолжения теста из изображения
+            gpt_response_data, gpt_history = await openai_client.continue_image_test_session(
+                history=current_gpt_history,
+                user_message_text=text_received
+            )
+        else:
+            # Используем обычный метод для продолжения теста
+            gpt_response_data, gpt_history = await openai_client.continue_test_session(
+                history=current_gpt_history,
+                user_message_text=text_received
+            )
 
         if gpt_response_data:
             # Логика добавления tool_message больше не нужна

@@ -77,11 +77,16 @@ class OpenAIClient:
                 model=self.model,
                 messages=current_messages_for_api,
                 response_format={"type": "json_object"}, 
-                max_tokens=1500,
+                max_tokens=3000,
             )
             
             response_message = response.choices[0].message
+            finish_reason = response.choices[0].finish_reason
             assistant_response_content = response_message.content
+            
+            # Проверяем, был ли ответ обрезан
+            if finish_reason == "length":
+                logger.warning(f"OpenAI response was truncated due to token limit. Consider increasing max_tokens or reducing context.")
             
             assistant_message_dict_for_history = {"role": "assistant", "content": assistant_response_content}
             final_history_after_call.append(assistant_message_dict_for_history)
@@ -140,7 +145,15 @@ class OpenAIClient:
                     else:
                         logger.error(f"OpenAIClient: Could not find JSON block ({{...}}) in content: >>>{content_to_parse}<<<")
             else:
-                logger.warning(f"OpenAIClient: AI response had no content. Finish reason: {response.choices[0].finish_reason if response.choices else 'Unknown'}")
+                logger.warning(f"OpenAIClient: AI response had no content. Finish reason: {finish_reason}")
+                # Если ответ был обрезан, возвращаем специальное сообщение
+                if finish_reason == "length":
+                    parsed_data = {
+                        "message_to_user": "Извините, произошла ошибка при генерации ответа. Попробуйте переформулировать ваш вопрос более кратко.",
+                        "current_question_number": 1,
+                        "total_questions_in_test": 1,
+                        "is_final_summary": 1
+                    }
             
             return parsed_data, final_history_after_call
 
@@ -158,6 +171,71 @@ class OpenAIClient:
 
 
     async def continue_test_session(self, history: List[Dict], user_message_text: str) -> Tuple[Optional[Dict], List[Dict]]:
+        messages_for_api_call = list(history)
+        messages_for_api_call.append({"role": "user", "content": user_message_text})
+        
+        parsed_data, updated_history = await self._make_openai_call(messages_for_api_call)
+        return parsed_data, updated_history
+
+    def _get_system_prompt_for_image_analysis(self) -> str:
+        return """
+        Ты — бот Zadavalnik помощник для анализа изображений и создания тестов.
+        
+        Пользователь отправил изображение. Твоя задача:
+        1. Проанализировать содержимое изображения
+        2. Определить подходящую тему для тестирования на основе изображения
+        3. Создать интерактивный тест по этой теме
+        
+        Тест должен состоять из нескольких вопросов (3-5), связанных с содержимым изображения.
+        
+        ВАЖНО: Ты ДОЛЖЕН форматировать КАЖДОЕ свое сообщение пользователю как JSON объект.
+        Этот JSON объект должен содержать следующие поля:
+        - "message_to_user": (string) Текст сообщения для пользователя, включающий описание того, что ты видишь на изображении и первый вопрос теста.
+        - "current_question_number": (integer) Текущий порядковый номер вопроса (1 для первого вопроса).
+        - "total_questions_in_test": (integer) Общее количество вопросов в тесте.
+        - "is_final_summary": (integer) 0 для обычных вопросов, 1 для финального резюме.
+        - "detected_topic": (string) Определенная тема на основе изображения.
+        
+        Пример ответа:
+        {
+            "message_to_user": "Я вижу на изображении схему строения клетки с подписанными органеллами. Проведем тест по теме 'Строение растительной клетки'.\\n\\nВопрос 1: Какая органелла отвечает за фотосинтез в растительной клетке?",
+            "current_question_number": 1,
+            "total_questions_in_test": 4,
+            "is_final_summary": 0,
+            "detected_topic": "Строение растительной клетки"
+        }
+        
+        Веди диалог последовательно. Твой ответ должен быть ТОЛЬКО JSON объектом.
+        """
+
+    async def analyze_image_and_start_test(self, image_base64: str, image_format: str = "jpeg") -> Tuple[Optional[Dict], List[Dict]]:
+        """Анализ изображения и создание теста на основе его содержимого"""
+        system_message_content = self._get_system_prompt_for_image_analysis()
+        
+        messages_for_api_call = [
+            {"role": "system", "content": system_message_content},
+            {
+                "role": "user", 
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "Проанализируй это изображение и создай тест на основе его содержимого."
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/{image_format};base64,{image_base64}"
+                        }
+                    }
+                ]
+            }
+        ]
+        
+        parsed_data, updated_history = await self._make_openai_call(messages_for_api_call)
+        return parsed_data, updated_history
+
+    async def continue_image_test_session(self, history: List[Dict], user_message_text: str) -> Tuple[Optional[Dict], List[Dict]]:
+        """Продолжение теста, начатого с изображения"""
         messages_for_api_call = list(history)
         messages_for_api_call.append({"role": "user", "content": user_message_text})
         
