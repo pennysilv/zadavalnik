@@ -1,5 +1,7 @@
 import logging
 import json # Для json.dumps в tool message - БОЛЬШЕ НЕ НУЖЕН ДЛЯ ЭТОЙ ЦЕЛИ
+import base64
+import io
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
@@ -68,13 +70,48 @@ async def new_test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def handle_photo_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик фотографий - пока не поддерживается"""
+    """Обработчик фотографий - скачивание и конвертация в base64"""
     user_id = update.effective_user.id
     logger.info(f"User {user_id} sent a photo")
     
-    await update.message.reply_text(
-        "Этот формат не поддерживается. Наша команда работает над его добавлением."
-    )
+    try:
+        # Получаем самое большое изображение из отправленного
+        photo = update.message.photo[-1]  # Берем самое большое разрешение
+        
+        # Уведомляем пользователя о начале обработки
+        await update.message.reply_text("Обрабатываю изображение...")
+        await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+        
+        # Скачиваем файл
+        file = await context.bot.get_file(photo.file_id)
+        
+        # Скачиваем изображение в память
+        image_bytes = io.BytesIO()
+        await file.download_to_memory(image_bytes)
+        image_bytes.seek(0)
+        
+        # Конвертируем в base64
+        image_base64 = base64.b64encode(image_bytes.getvalue()).decode('utf-8')
+        
+        logger.info(f"Successfully converted image to base64 for user {user_id}. Size: {len(image_base64)} chars")
+        
+        # Пока что просто уведомляем об успешной обработке
+        await update.message.reply_text(
+            "Изображение успешно обработано и конвертировано в формат base64!\n"
+            "В будущих версиях бот сможет анализировать содержимое изображений."
+        )
+
+        # Здесь в будущем можно будет передать image_base64 в OpenAI для анализа
+        # openai_client: OpenAIClient = context.application.bot_data.get('openai_client')
+        # if openai_client:
+        #     # Анализ изображения через OpenAI Vision API
+        #     pass
+        
+    except Exception as e:
+        logger.error(f"Error processing photo for user {user_id}: {e}", exc_info=True)
+        await update.message.reply_text(
+            "Произошла ошибка при обработке изображения. Попробуйте еще раз."
+        )
 
 
 async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
