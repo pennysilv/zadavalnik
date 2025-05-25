@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 def setup_handlers(app: Application):
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("newtest", new_test_command))
+    app.add_handler(MessageHandler(filters.PHOTO, handle_photo_message))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))
 
 def _clear_user_test_state(context: ContextTypes.DEFAULT_TYPE):
@@ -64,6 +65,16 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def new_test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info(f"User {update.effective_user.id} used /newtest")
     await _initialize_new_test_session(update, context)
+
+
+async def handle_photo_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик фотографий - пока не поддерживается"""
+    user_id = update.effective_user.id
+    logger.info(f"User {user_id} sent a photo")
+    
+    await update.message.reply_text(
+        "Этот формат не поддерживается. Наша команда работает над его добавлением."
+    )
 
 
 async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
