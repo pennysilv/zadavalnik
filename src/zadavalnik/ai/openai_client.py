@@ -179,7 +179,6 @@ class OpenAIClient:
 
     def _get_system_prompt_for_image_analysis(self) -> str:
         return """
-````text
         Ты — бот Zadavalnik помощник для повторения материала.
         Проводящишь интерактивное тестирование по теме: "{Тема, связанная с тем, что ты увидел на изображении}".
 
@@ -259,6 +258,82 @@ class OpenAIClient:
 
     async def continue_image_test_session(self, history: List[Dict], user_message_text: str) -> Tuple[Optional[Dict], List[Dict]]:
         """Продолжение теста, начатого с изображения"""
+        messages_for_api_call = list(history)
+        messages_for_api_call.append({"role": "user", "content": user_message_text})
+        
+        parsed_data, updated_history = await self._make_openai_call(messages_for_api_call)
+        return parsed_data, updated_history
+
+    def _get_system_prompt_for_text_analysis(self) -> str:
+        return """
+        Ты — бот Zadavalnik помощник для повторения материала.
+        Проводящишь интерактивное тестирование по теме: "{Тема, связанная с содержанием текстового документа}".
+
+        Твоя задача — задавать вопросы пользователю один за другим.
+        Тест должен состоять из нескольких вопросов (например, 3-5, определи это сам в первом сообщении).
+
+        В начале первого вопроса сообщи "Сейчас мы проведем интерактивный тест по [тема теста]" и количество вопросов.
+
+        Когда ты получил ответ пользователя на вопрос, ты должен:
+        ## 1
+        Если ответ пользователя хоть как-то связан с вопросом: 
+            Дать на него краткий комментарий: (правильно/неправильно, дай короткое пояснение при необходимости).
+        Если же пользователь отвечает не по теме вопроса или говорит, что не знает, забыл, простит сказать ответ.
+            Просто дать ответ ответ на вопрос без комментариев.
+        ## 2
+        В этом же сообщении (через строку) пиши текст СЛЕДУЮЩЕГО вопроса.
+        
+        ВАЖНО: Ты ДОЛЖЕН форматировать КАЖДОЕ свое сообщение пользователю как JSON объект.
+        Этот JSON объект должен содержать следующие поля:
+        - "message_to_user": (string) Текст сообщения для пользователя. Это то, что увидит пользователь.
+        - "current_question_number": (integer) Текущий порядковый номер ЗАДАВАЕМОГО вопроса. Начинается с 1 для первого вопроса, 2 для второго и т.д. Если ты комментируешь ответ на вопрос N и затем задаешь вопрос N+1, current_question_number должен быть N+1.
+        - "total_questions_in_test": (integer) Общее количество вопросов, которое ты планируешь задать в этом тесте. Должно быть установлено в первом вызове и не меняться.
+        - "is_final_summary": (integer) Установи в 1, если это финальное сообщение с подведением итогов теста. В остальных случаях 0.
+
+        Пример твоего ответа:
+        {{
+            "message_to_user": "Верно! Молодец.\\n\\nСледующий вопрос: Как называется столица Франции?",
+            "current_question_number": 2,
+            "total_questions_in_test": 3,
+            "is_final_summary": 0
+        }}
+
+        Еще пример (финальное резюме):
+        {{
+            "message_to_user": "Тест завершен. Вы ответили правильно на 2 из 3 вопросов. Стоит повторить тему X.",
+            "current_question_number": 3, 
+            "total_questions_in_test": 3,
+            "is_final_summary": 1
+        }}
+                
+        - Поле 'total_questions_in_test' должно быть заполнено с первого же сообщения и оставаться консистентным.
+        - Поле 'current_question_number' должно корректно инкрементироваться для каждого НОВОГО вопроса. 
+        - Поле 'is_final_summary' должно быть 1 ТОЛЬКО для самого последнего сообщения, завершающего тест.
+        
+        Если это был последний вопрос: 
+        - предоставь краткое резюме в 'message_to_user': На какие вопросы пользователь ответил верно, а какие темы стоит повторить.
+        - Если были неточности в формулировках ответов пользователя, укажи на них.
+
+        Веди диалог последовательно. Твой ответ должен быть ТОЛЬКО JSON объектом, без какого-либо другого текста до или после него.
+        """
+
+    async def analyze_text_and_start_test(self, text_content: str) -> Tuple[Optional[Dict], List[Dict]]:
+        """Анализ текстового документа и создание теста на основе его содержимого"""
+        system_message_content = self._get_system_prompt_for_text_analysis()
+        
+        messages_for_api_call = [
+            {"role": "system", "content": system_message_content},
+            {
+                "role": "user", 
+                "content": f"Проанализируй этот текст и создай тест на основе его содержимого:\n\n{text_content}"
+            }
+        ]
+        
+        parsed_data, updated_history = await self._make_openai_call(messages_for_api_call)
+        return parsed_data, updated_history
+
+    async def continue_text_test_session(self, history: List[Dict], user_message_text: str) -> Tuple[Optional[Dict], List[Dict]]:
+        """Продолжение теста, начатого с текстового документа"""
         messages_for_api_call = list(history)
         messages_for_api_call.append({"role": "user", "content": user_message_text})
         

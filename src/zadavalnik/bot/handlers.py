@@ -24,12 +24,14 @@ def setup_handlers(app: Application):
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("newtest", new_test_command))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo_message))
+    app.add_handler(MessageHandler(filters.Document.ALL, handle_document_message))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))
 
 def _clear_user_test_state(context: ContextTypes.DEFAULT_TYPE):
     keys_to_clear = [
         'current_state', 'current_topic', 'gpt_chat_history', 
-        'current_question_num', 'total_questions', 'active_test_attempt_id'
+        'current_question_num', 'total_questions', 'active_test_attempt_id',
+        'test_from_image', 'test_from_document'
     ]
     for key in keys_to_clear:
         if key in context.user_data:
@@ -219,6 +221,121 @@ async def handle_photo_message(update: Update, context: ContextTypes.DEFAULT_TYP
         )
 
 
+async def handle_document_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик документов - анализ текстового файла и создание теста"""
+    user_id = update.effective_user.id
+    current_state = context.user_data.get('current_state')
+    
+    logger.info(f"User {user_id} (state: {current_state}) sent a document")
+    
+    openai_client = await _get_openai_client(update, context)
+    if not openai_client:
+        return
+    
+    try:
+        if current_state == UserState.AWAITING_TOPIC:
+            # Проверяем тип файла
+            document = update.message.document
+            
+            # Проверяем, что это текстовый файл
+            if not document.mime_type or not document.mime_type.startswith('text/'):
+                if not document.file_name or not document.file_name.lower().endswith('.txt'):
+                    await update.message.reply_text(
+                        "Пожалуйста, отправьте текстовый файл в формате .txt"
+                    )
+                    return
+            
+            # Проверяем размер файла (примерно 50,000 слов = ~300KB для среднего текста)
+            max_file_size = 500 * 1024  # 500KB для безопасности
+            if document.file_size > max_file_size:
+                await update.message.reply_text(
+                    f"Файл слишком большой. Максимальный размер: {max_file_size // 1024}KB"
+                )
+                return
+            
+            await update.message.reply_text("Загружаю и анализирую документ...")
+            await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+            
+            # Скачиваем файл
+            file = await context.bot.get_file(document.file_id)
+            
+            # Скачиваем документ в память
+            document_bytes = io.BytesIO()
+            await file.download_to_memory(document_bytes)
+            document_bytes.seek(0)
+            
+            # Читаем текст
+            try:
+                text_content = document_bytes.read().decode('utf-8')
+            except UnicodeDecodeError:
+                await update.message.reply_text(
+                    "Не удалось прочитать файл. Убедитесь, что это текстовый файл в кодировке UTF-8."
+                )
+                return
+            
+            # Проверяем количество слов
+            word_count = len(text_content.split())
+            if word_count > 50000:
+                await update.message.reply_text(
+                    f"Документ содержит {word_count} слов, что превышает лимит в 50,000 слов. "
+                    "Пожалуйста, отправьте более короткий документ."
+                )
+                return
+            
+            logger.info(f"Document processed for user {user_id}. Word count: {word_count}")
+            
+            # Получаем структурированные данные и обновленную историю от OpenAI
+            gpt_response_data, gpt_history = await openai_client.analyze_text_and_start_test(text_content)
+            
+            if gpt_response_data:
+                # Определяем тему на основе документа (первые 100 символов как краткое описание)
+                topic = f"Документ: {document.file_name or 'text_document.txt'}"
+                
+                # Используем общую функцию для обработки начала теста
+                success = await _process_test_start_from_response(
+                    update, context, gpt_response_data, gpt_history, topic, is_image_test=False
+                )
+                
+                # Помечаем, что тест создан из документа
+                if success:
+                    context.user_data['test_from_document'] = True
+                    await update.message.reply_text(f"✅ Документ обработан ({word_count} слов)")
+                
+            else:
+                logger.warning(f"Failed to start AI test session from document for user {user_id}")
+                await update.message.reply_text(
+                    "Не удалось создать тест на основе документа. Попробуйте другой файл или повторите позже."
+                )
+        
+        elif current_state == UserState.IN_TEST:
+            await update.message.reply_text(
+                "Вы находитесь в процессе прохождения теста. Пожалуйста, ответьте на текущий вопрос текстом."
+            )
+            
+        elif current_state == UserState.TEST_COMPLETED:
+            await update.message.reply_text(
+                "Тест уже завершен. Если хотите создать новый тест из документа, используйте команду /newtest."
+            )
+        
+        elif current_state == UserState.START or not current_state:
+            await update.message.reply_text(
+                "Для начала работы используйте команду /start или /newtest, затем отправьте текстовый документ."
+            )
+            _clear_user_test_state(context)
+        
+        else:
+            logger.error(f"User {user_id} is in an unknown state: {current_state}")
+            await update.message.reply_text("Произошла внутренняя ошибка состояния. Пожалуйста, перезапустите бота командой /start.")
+            _clear_user_test_state(context)
+            context.user_data['current_state'] = UserState.START
+        
+    except Exception as e:
+        logger.error(f"Error processing document for user {user_id}: {e}", exc_info=True)
+        await update.message.reply_text(
+            "Произошла ошибка при обработке документа. Попробуйте еще раз."
+        )
+
+
 async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     text_received = update.message.text
@@ -283,12 +400,19 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
 
         current_gpt_history = context.user_data.get('gpt_chat_history', [])
         
-        # Проверяем, был ли тест создан из изображения
+        # Проверяем, был ли тест создан из изображения или документа
         test_from_image = context.user_data.get('test_from_image', False)
+        test_from_document = context.user_data.get('test_from_document', False)
         
         if test_from_image:
             # Используем метод для продолжения теста из изображения
             gpt_response_data, gpt_history = await openai_client.continue_image_test_session(
+                history=current_gpt_history,
+                user_message_text=text_received
+            )
+        elif test_from_document:
+            # Используем метод для продолжения теста из документа
+            gpt_response_data, gpt_history = await openai_client.continue_text_test_session(
                 history=current_gpt_history,
                 user_message_text=text_received
             )
